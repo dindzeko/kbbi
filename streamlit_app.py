@@ -1,132 +1,109 @@
 import streamlit as st
 from docx import Document
 import re
-import requests
-from collections import defaultdict
+from supabase import create_client
+from difflib import get_close_matches
+import os
+
+# Konfigurasi Supabase (gunakan environment variables dari server Anda)
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_ANON_KEY')
+
+# Inisialisasi client Supabase
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Pastikan environment variables SUPABASE_URL dan SUPABASE_ANON_KEY telah diset")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Judul aplikasi
 st.title("📝 Aplikasi Pemeriksaan Kata Berdasarkan KBBI")
 st.write("Upload dokumen Word (.docx) untuk memeriksa kata-kata yang tidak sesuai KBBI.")
 
+@st.cache_data(ttl=3600)  # Cache data selama 1 jam
+def load_kbbi_words():
+    """Ambil semua kata dari tabel kbbifull di Supabase"""
+    response = supabase.table('kbbifull').select('kata').execute()
+    if response.error:
+        st.error(f"Terjadi kesalahan: {response.error.message}")
+        return set()
+    return {row['kata'].lower() for row in response.data}
+
+# Load kata-kata KBBI sekali saja
+VALID_WORDS = load_kbbi_words()
+
 def preprocess_text(text):
-    """
-    Membersihkan teks dari tanda baca dan mengubah ke huruf kecil.
-    """
-    # Hapus tanda baca dan angka
+    """Membersihkan teks dari tanda baca dan mengubah ke huruf kecil."""
     text = re.sub(r'[^\w\s]', '', text)
     text = re.sub(r'\d+', '', text)
-    # Ubah ke huruf kecil
-    text = text.lower()
-    return text
+    return text.lower()
 
-def check_word_with_api(word, cache):
-    """
-    Memeriksa validitas kata menggunakan API KBBI dengan caching.
-    """
-    if word in cache:
-        return cache[word]
-    url = f"https://services.x-labs.my.id/kbbi/search?word={word}"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            # Jika kata ditemukan, hasilnya akan berisi array dengan data
-            is_valid = len(data) > 0
-            cache[word] = is_valid
-            return is_valid
-        cache[word] = False
-        return False
-    except Exception:
-        cache[word] = False
-        return False
+def check_word(word):
+    """Periksa apakah kata ada di KBBI"""
+    return word in VALID_WORDS
 
-def suggest_word_with_api(word, cache):
-    """
-    Memberikan rekomendasi kata yang sesuai KBBI berdasarkan input dengan caching.
-    """
-    if word in cache:
-        return cache[word]
-    url = f"https://services.x-labs.my.id/kbbi/suggest?word={word}"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            # Ambil saran kata pertama jika ada
-            suggestion = data[0] if data else "Tidak ada rekomendasi"
-            cache[word] = suggestion
-            return suggestion
-        cache[word] = "Tidak ada rekomendasi"
-        return "Tidak ada rekomendasi"
-    except Exception:
-        cache[word] = "Tidak ada rekomendasi"
-        return "Tidak ada rekomendasi"
+def suggest_word(word):
+    """Berikan rekomendasi kata terdekat"""
+    matches = get_close_matches(word, VALID_WORDS, n=1, cutoff=0.6)
+    return matches[0] if matches else "Tidak ada rekomendasi"
 
-def check_spelling_with_api(text):
-    """
-    Memeriksa kata-kata dalam teks menggunakan API KBBI dengan progress bar.
-    """
+def check_spelling(text):
+    """Periksa semua kata dalam teks"""
     words = preprocess_text(text).split()
-    total_words = len(words)
-    misspelled_words = []
+    misspelled = []
     suggestions = {}
-    cache = {}  # Cache untuk menyimpan hasil pengecekan dan rekomendasi
     
-    # Progress bar
     progress_bar = st.progress(0)
     status_text = st.empty()
+    total = len(words)
     
     for i, word in enumerate(words):
-        if not check_word_with_api(word, cache):
-            misspelled_words.append(word)
-            suggestions[word] = suggest_word_with_api(word, cache)
+        if not check_word(word):
+            misspelled.append(word)
+            suggestions[word] = suggest_word(word)
         
-        # Update progress bar
-        progress = (i + 1) / total_words
+        # Update progress
+        progress = (i + 1) / total
         progress_bar.progress(progress)
-        status_text.text(f"Memeriksa kata: {i + 1}/{total_words} ({progress * 100:.2f}%)")
+        status_text.text(f"Memeriksa kata: {i+1}/{total} ({progress:.2%})")
     
-    return misspelled_words, suggestions
+    return misspelled, suggestions
 
 # Upload file
 uploaded_file = st.file_uploader("Upload File Word (.docx)", type=["docx"])
 if uploaded_file:
     try:
-        # Baca dokumen Word
+        # Ekstrak teks dari dokumen Word
         doc = Document(uploaded_file)
+        full_text = " ".join([para.text for para in doc.paragraphs])
         
-        # Ekstrak teks dari semua paragraf
-        full_text = ""
-        for para in doc.paragraphs:
-            full_text += para.text + " "
-        
-        # Preprocessing teks
-        cleaned_text = preprocess_text(full_text)
-        
-        # Periksa ejaan menggunakan API KBBI
+        # Pemeriksaan ejaan
         with st.spinner("Memeriksa kata-kata..."):
-            misspelled_words, suggestions = check_spelling_with_api(cleaned_text)
+            misspelled_words, suggestions = check_spelling(full_text)
         
-        # Output hasil
+        # Tampilkan hasil
         if misspelled_words:
-            st.warning("Kata-kata yang tidak sesuai KBBI:")
-            # Tampilkan dalam bentuk tabel
+            unique_misspelled = list(set(misspelled_words))
             table_data = {
-                "Kata Tidak Sesuai": list(set(misspelled_words)),
-                "Rekomendasi Kata": [suggestions[word] for word in set(misspelled_words)]
+                "Kata Tidak Sesuai": unique_misspelled,
+                "Rekomendasi": [suggestions[word] for word in unique_misspelled]
             }
+            
+            st.warning(f"Kata tidak sesuai ditemukan: {len(unique_misspelled)}")
             st.table(table_data)
             
-            # Tombol download hasil pemeriksaan
-            result_text = "Hasil Pemeriksaan Kata:\n\n"
-            for word in set(misspelled_words):
-                result_text += f"Kata Tidak Sesuai: {word} -> Rekomendasi: {suggestions[word]}\n"
+            # Tombol download hasil
+            result = "\n".join([
+                f"{word} -> {suggestions[word]}" 
+                for word in unique_misspelled
+            ])
             st.download_button(
-                label="📥 Download Hasil Pemeriksaan",
-                data=result_text,
-                file_name="hasil_pemeriksaan_kata.txt",
+                "📥 Download Hasil",
+                data=result,
+                file_name="hasil_pemeriksaan.txt",
                 mime="text/plain"
             )
         else:
-            st.success("Tidak ada kata yang tidak sesuai KBBI.")
+            st.success("Tidak ada kata yang tidak sesuai KBBI!")
+    
     except Exception as e:
         st.error(f"Terjadi kesalahan: {str(e)}")
