@@ -29,8 +29,14 @@ try:
     
     # Tes koneksi awal
     test_response = supabase.table('kbbifull').select('kata').limit(1).execute()
-    if test_response.error or len(test_response.data) == 0:
-        st.warning("Tabel kbbifull kosong atau tidak ditemukan. Pastikan data KBBI sudah diunggah ke Supabase.")
+    
+    # Penanganan error untuk versi supabase terbaru
+    if hasattr(test_response, 'error') and test_response.error:
+        st.error(f"Error Supabase: {test_response.error.message}")
+        st.stop()
+    if len(test_response.data) == 0:
+        st.warning("Tabel kbbifull kosong. Pastikan data KBBI sudah diunggah ke Supabase.")
+        
 except Exception as e:
     st.error(f"Koneksi ke Supabase gagal: {str(e)}")
     st.info(
@@ -52,9 +58,12 @@ def load_kbbi_words():
     """Ambil semua kata KBBI dari Supabase"""
     try:
         response = supabase.table('kbbifull').select('kata').execute()
-        if response.error:
+        
+        # Penanganan error untuk versi supabase terbaru
+        if hasattr(response, 'error') and response.error:
             st.error(f"Error mengambil data: {response.error.message}")
             return set()
+            
         return {row['kata'].lower() for row in response.data}
     except Exception as e:
         st.error(f"Gagal mengambil data: {str(e)}")
