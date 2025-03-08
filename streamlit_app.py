@@ -31,11 +31,9 @@ def load_kbbi():
         all_words = []
         page = 1
         while True:
-            # Ambil data per 1000 baris
             res = supabase.table('kbbifull').select('kata').range((page-1)*1000, page*1000-1).execute()
             if not res.data:
                 break
-            # Proses data
             words = [row['kata'].strip().lower() for row in res.data]
             all_words.extend(words)
             page += 1
@@ -51,8 +49,89 @@ def preprocess(text):
     text = re.sub(r'[^\w\s]', '', text.lower())
     return re.sub(r'\d+', '', text)
 
+def check_word(word):
+    """Cek validasi kata dengan analisis imbuhan lengkap"""
+    if word in KBBI_WORDS:
+        return True
+    
+    # Pola imbuhan lengkap
+    prefixes = ['ber', 'di', 'ter', 'me', 'pe', 'ke', 'se']
+    suffixes = ['kan', 'an', 'i', 'nya']
+    infixes = ['el', 'em', 'er', 'in']
+    circumfixes = [
+        ('ber', 'an'), ('ke', 'an'), ('pe', 'an'), 
+        ('se', 'nya'), ('di', 'kan'), ('me', 'kan')
+    ]
+    
+    # Cek semua kemungkinan imbuhan
+    possible_roots = []
+    
+    # 1. Cek awalan (prefix)
+    for pre in prefixes:
+        if word.startswith(pre):
+            possible_roots.append(word[len(pre):])
+    
+    # 2. Cek akhiran (suffix)
+    for suf in suffixes:
+        if word.endswith(suf):
+            possible_roots.append(word[:-len(suf)])
+    
+    # 3. Cek sisipan (infix)
+    for inf in infixes:
+        if len(word) > 4:
+            pattern = re.compile(f"^{inf}")
+            possible_roots.append(pattern.sub('', word))
+    
+    # 4. Cek apitan (circumfix)
+    for (pre, suf) in circumfixes:
+        if word.startswith(pre) and word.endswith(suf):
+            root = word[len(pre):-len(suf)]
+            if root:
+                possible_roots.append(root)
+    
+    # 5. Cek kombinasi awalan + akhiran
+    for pre in prefixes:
+        for suf in suffixes:
+            if word.startswith(pre) and word.endswith(suf):
+                root = word[len(pre):-len(suf)]
+                if root:
+                    possible_roots.append(root)
+    
+    # 6. Cek pola khusus (peN-, per-, pem-, pen-, dll)
+    if word.startswith('pe'):
+        possible_roots.append(word[2:])  # pe- → ''
+        if len(word) > 3:
+            possible_roots.append(word[3:])  # pem-, pen-, etc
+    
+    # Cek semua kemungkinan akar kata
+    for root in possible_roots:
+        if root in KBBI_WORDS:
+            return True
+    
+    return False
+
+def suggest_word(word):
+    """Berikan rekomendasi dengan analisis imbuhan"""
+    if word in KBBI_WORDS:
+        return "Kata sudah sesuai KBBI"
+    
+    # Cari rekomendasi langsung
+    matches = get_close_matches(word, KBBI_WORDS, n=3, cutoff=0.7)
+    
+    # Jika tidak ada, analisis imbuhan
+    if not matches:
+        possible_roots = []
+        for pre in ['ber', 'di', 'ter', 'me', 'pe', 'ke', 'se']:
+            if word.startswith(pre):
+                possible_roots.append(word[len(pre):])
+        
+        for root in possible_roots:
+            matches += get_close_matches(root, KBBI_WORDS, n=3, cutoff=0.7)
+    
+    return ", ".join(matches) if matches else "Tidak ada rekomendasi"
+
 def check_spelling(text):
-    """Periksa ejaan dan beri rekomendasi"""
+    """Periksa ejaan dengan analisis imbuhan"""
     words = preprocess(text).split()
     misspelled = []
     suggestions = {}
@@ -63,11 +142,9 @@ def check_spelling(text):
     
     for i, word in enumerate(words):
         clean_word = word.strip()
-        if clean_word and clean_word not in KBBI_WORDS:
+        if clean_word and not check_word(clean_word):
             misspelled.append(clean_word)
-            # Cari rekomendasi dengan algoritma Levenshtein
-            matches = get_close_matches(clean_word, KBBI_WORDS, n=3, cutoff=0.7)
-            suggestions[clean_word] = ", ".join(matches) if matches else "Tidak ada rekomendasi"
+            suggestions[clean_word] = suggest_word(clean_word)
         
         progress.progress((i+1)/total)
         status.text(f"Memproses: {i+1}/{total} kata")
@@ -77,7 +154,7 @@ def check_spelling(text):
 # ====================================================================================
 # ANTARMUKA STREAMLIT
 # ====================================================================================
-st.title("🔍 Pemeriksa Ejaan KBBI")
+st.title("🔍 Pemeriksa Ejaan KBBI dengan Analisis Imbuhan Lengkap")
 st.markdown("Upload file Word (.docx) untuk mengecek kesesuaian kata dengan KBBI")
 
 uploaded_file = st.file_uploader("Upload Dokumen Word", type=["docx"])
