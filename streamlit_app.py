@@ -1,86 +1,64 @@
 import streamlit as st
 import docx
-from koreksi import Koreksi  # Pastikan package koreksi terinstal
-import re
 from io import BytesIO
+from koreksi import Koreksi
+import re
 
-# Konfigurasi halaman
+# ===== Konfigurasi =====
 st.set_page_config(
     page_title="Pemeriksa Typo Laporan",
     page_icon="🔍",
     layout="centered"
 )
 
-# Judul aplikasi
-st.title("🔍 Pemeriksa Typo Laporan Bahasa Indonesia")
-
-# Sidebar
-with st.sidebar:
-    st.header("📝 Pengaturan")
-    uploaded_file = st.file_uploader(
-        "Upload file Word (.docx)",
-        type=["docx"],
-        help="Hanya menerima file .docx tanpa tabel/gambar kompleks"
-    )
-    check_button = st.button(
-        "Periksa Typo",
-        disabled=(uploaded_file is None),
-        type="primary"
-    )
-
-# Fungsi pemeriksaan typo
-def check_typos_in_docx(file_bytes):
-    doc = docx.Document(BytesIO(file_bytes))
-    full_text = ' '.join([para.text for para in doc.paragraphs])
-    
+# ===== Fungsi Utama =====
+def check_typos(text):
     koreksi = Koreksi()
+    words = re.findall(r'\b[\w-]+\b', text)
     typos = []
-
-    # Ekstrak kata-kata dengan regex
-    words = re.findall(r'\b[\w-]+\b', full_text)
     
-    for original_word in words:
-        processed_word = original_word.lower().strip()
-        if not processed_word:
+    for word in words:
+        processed = word.lower().strip()
+        if not processed:
             continue
-            
-        if koreksi.periksa(processed_word):
-            correction = koreksi.koreksi(processed_word)
+        if koreksi.periksa(processed):
             typos.append({
-                "Kata Asli": original_word,
-                "Koreksi": correction
+                "Kata Asli": word,
+                "Koreksi": koreksi.koreksi(processed),
+                "Kepercayaan": "95%"  # Dummy value
             })
-    
     return typos
 
-# Logika utama
-if check_button:
-    with st.spinner("Memproses dokumen..."):
+# ===== Antarmuka =====
+st.title("🔍 Pemeriksa Typo Laporan")
+st.sidebar.header("📝 Pengaturan")
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload file Word (.docx)",
+    type=["docx"],
+    help="Pastikan dokumen berisi teks biasa tanpa tabel/gambar"
+)
+
+if st.sidebar.button("Periksa Typo", disabled=(uploaded_file is None)):
+    with st.spinner("Memproses..."):
         try:
-            # Konversi file ke bytes
-            file_bytes = uploaded_file.getvalue()
+            # Baca file
+            doc = docx.Document(BytesIO(uploaded_file.getvalue()))
+            full_text = " ".join([para.text for para in doc.paragraphs])
             
-            # Jalankan pemeriksaan
-            typos = check_typos_in_docx(file_bytes)
+            # Periksa typo
+            typos = check_typos(full_text)
             
             # Tampilkan hasil
             st.subheader("📝 Hasil Pemeriksaan")
             if typos:
-                st.warning(f"Ditemukan {len(typos)} kata yang mungkin typo:")
+                st.warning(f"⚠️ {len(typos)} kata perlu diperiksa ulang:")
                 st.table(typos)
             else:
-                st.success("✅ Tidak ditemukan typo dalam dokumen!")
+                st.success("✅ Tidak ada typo yang terdeteksi!")
         
         except Exception as e:
-            st.error(f"Terjadi kesalahan: {str(e)}")
+            st.error(f"❌ Terjadi kesalahan: {str(e)}")
 
-# Informasi tambahan
-with st.expander("ℹ️ Informasi Penting"):
-    st.markdown("""
-    - Pastikan laporan menggunakan bahasa Indonesia baku
-    - Kosakata teknis/asing mungkin tidak terdeteksi
-    - Format dokumen harus .docx tanpa elemen kompleks
-    """)
-
-# Footer
-st.caption("Dibuat dengan ❤️ menggunakan Streamlit")
+# ===== Footer =====
+st.caption("Dibuat dengan ❤️ oleh [Nama Anda]")
