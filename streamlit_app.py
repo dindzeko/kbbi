@@ -1,6 +1,6 @@
 import streamlit as st
 import docx
-from koreksi import Koreksi
+from koreksi import Koreksi  # Pastikan package koreksi terinstal
 import re
 from io import BytesIO
 
