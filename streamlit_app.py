@@ -17,13 +17,8 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    # Tes koneksi
-    test = supabase.table('kbbifull').select('kata').limit(1).execute()
-    if hasattr(test, 'error') and test.error:
-        st.error(f"Error Supabase: {test.error.message}")
-        st.stop()
 except Exception as e:
-    st.error(f"Koneksi gagal: {str(e)}")
+    st.error(f"Gagal terhubung ke Supabase: {str(e)}")
     st.stop()
 
 # ====================================================================================
@@ -31,15 +26,22 @@ except Exception as e:
 # ====================================================================================
 @st.cache_data(ttl=3600)
 def load_kbbi():
-    """Muat semua kata KBBI dari Supabase"""
+    """Muat semua kata KBBI dari Supabase dengan pagination"""
     try:
-        res = supabase.table('kbbifull').select('kata').execute()
-        if hasattr(res, 'error') and res.error:
-            st.error(f"Error: {res.error.message}")
-            return set()
-        return {row['kata'].strip().lower() for row in res.data}
+        all_words = []
+        page = 1
+        while True:
+            # Ambil data per 1000 baris
+            res = supabase.table('kbbifull').select('kata').range((page-1)*1000, page*1000-1).execute()
+            if not res.data:
+                break
+            # Proses data
+            words = [row['kata'].strip().lower() for row in res.data]
+            all_words.extend(words)
+            page += 1
+        return set(all_words)
     except Exception as e:
-        st.error(f"Gagal memuat data: {str(e)}")
+        st.error(f"Gagal memuat data KBBI: {str(e)}")
         return set()
 
 KBBI_WORDS = load_kbbi()
@@ -60,11 +62,12 @@ def check_spelling(text):
     total = len(words)
     
     for i, word in enumerate(words):
-        if word and word not in KBBI_WORDS:
-            misspelled.append(word)
-            # Cari rekomendasi dengan cutoff lebih ketat
-            matches = get_close_matches(word, KBBI_WORDS, n=3, cutoff=0.7)
-            suggestions[word] = ", ".join(matches) if matches else "Tidak ada rekomendasi"
+        clean_word = word.strip()
+        if clean_word and clean_word not in KBBI_WORDS:
+            misspelled.append(clean_word)
+            # Cari rekomendasi dengan algoritma Levenshtein
+            matches = get_close_matches(clean_word, KBBI_WORDS, n=3, cutoff=0.7)
+            suggestions[clean_word] = ", ".join(matches) if matches else "Tidak ada rekomendasi"
         
         progress.progress((i+1)/total)
         status.text(f"Memproses: {i+1}/{total} kata")
@@ -95,14 +98,14 @@ if uploaded_file:
             data = []
             for kata in unique_misspelled:
                 data.append({
-                    "Kata Salah": kata,
+                    "Kata": kata,
                     "Rekomendasi": saran.get(kata, "Tidak ada")
                 })
             
             st.dataframe(data, use_container_width=True)
             
             # Tombol download
-            hasil = "\n".join([f"{row['Kata Salah']} -> {row['Rekomendasi']}" for row in data])
+            hasil = "\n".join([f"{row['Kata']} -> {row['Rekomendasi']}" for row in data])
             st.download_button(
                 "📥 Download Hasil",
                 hasil,
